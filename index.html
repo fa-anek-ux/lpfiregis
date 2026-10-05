@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ระบบติดตามและสังเกตการณ์ไฟป่าและทรัพยากรธรรมชาติ</title>
+  
+  <!-- Tailwind CSS & FontAwesome -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- Leaflet GIS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    @keyframes sonar-pulse {
+      0% { transform: scale(1); opacity: 0.9; }
+      70% { transform: scale(3.2); opacity: 0; }
+      100% { transform: scale(3.2); opacity: 0; }
+    }
+    .sonar-wave {
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background-color: rgba(239, 68, 68, 0.75);
+      animation: sonar-pulse 1.8s infinite cubic-bezier(0.2, 0.6, 0.35, 1);
+      z-index: 1;
+    }
+    .custom-pin {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .pin-core {
+      position: relative;
+      z-index: 2;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 2px solid white;
+      box-shadow: 0 0 8px rgba(0,0,0,0.6);
+    }
+  </style>
+</head>
+<body class="w-screen h-screen m-0 p-0 overflow-hidden relative font-sans">
+
+  <!-- แผนที่ดาวเทียมเต็มหน้าจอ (100vw x 100vh) -->
+  <div id="map" class="w-full h-full z-0"></div>
+
+  <!-- แถบตัวกรองและค้นหาสถานที่ลอยตัว มุมบนซ้าย -->
+  <div class="absolute top-4 left-4 z-[1000] flex flex-col gap-2 max-w-sm w-[90%] sm:w-84">
+    <div class="bg-slate-900/80 backdrop-blur-md border border-slate-700/60 shadow-2xl rounded-2xl p-3 text-white">
+      
+      <!-- ช่องค้นหาด่วน (ค้นหาได้ทั้งหมุดในระบบ และสถานที่/หมู่บ้าน/ตำบล/อำเภอ/จังหวัด ทั่วไป) -->
+      <div class="flex items-center gap-2">
+        <i class="fa-solid fa-magnifying-glass-location text-orange-500 text-lg"></i>
+        <input type="text" id="searchInput" placeholder="ค้นหาจุด, ตำบล, อำเภอ หรือสถานที่..." 
+               class="bg-slate-800/80 text-sm border border-slate-600 rounded-lg px-2.5 py-1.5 w-full text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500">
+        <button id="searchOnlineBtn" class="p-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-white transition text-xs flex items-center justify-center shrink-0" title="ค้นหาสถานที่บนแผนที่">
+          <i class="fa-solid fa-arrow-right"></i>
+        </button>
+        <button id="toggleFilterBtn" class="p-2 hover:bg-slate-700 rounded-lg text-slate-300 transition shrink-0" title="ตัวกรองขั้นสูง">
+          <i class="fa-solid fa-sliders"></i>
+        </button>
+      </div>
+      <div id="searchStatus" class="hidden text-[10px] text-orange-400 mt-1 pl-1 flex items-center gap-1">
+        <i class="fa-solid fa-spinner fa-spin"></i> <span>กำลังค้นหาพิกัดภูมิศาสตร์...</span>
+      </div>
+
+      <!-- แผงดรอปดาวน์และตัวกรองเชิงลึกตามลำดับขั้น -->
+      <div id="filterPanel" class="hidden mt-3 pt-3 border-t border-slate-700/60 space-y-2 text-xs">
+        <div>
+          <label class="block mb-1 text-slate-300">หมวดหมู่หมุด</label>
+          <select id="filterCategory" class="w-full bg-slate-800 border border-slate-600 rounded p-1.5 text-white">
+            <option value="">ทั้งหมดทุกประเภท</option>
+            <option value="hazard">🔴 จุดเสี่ยงไฟป่า/อันตราย</option>
+            <option value="water">💧 แหล่งน้ำเพื่อการดับไฟ</option>
+            <option value="nature">🌲 แหล่งทรัพยากรธรรมชาติ</option>
+            <option value="checkpoint">⭐ จุดสำคัญ/สังเกตการณ์</option>
+          </select>
+        </div>
+        
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block mb-1 text-slate-300">จังหวัด</label>
+            <input type="text" id="filterProvince" placeholder="ระบุจังหวัด" class="w-full bg-slate-800 border border-slate-600 rounded p-1 text-white">
+          </div>
+          <div>
+            <label class="block mb-1 text-slate-300">อำเภอ</label>
+            <input type="text" id="filterDistrict" placeholder="ระบุอำเภอ" class="w-full bg-slate-800 border border-slate-600 rounded p-1 text-white">
+          </div>
+        </div>
+
+        <div>
+          <label class="block mb-1 text-slate-300">ตำบล</label>
+          <input type="text" id="filterSubdistrict" placeholder="ระบุตำบล" class="w-full bg-slate-800 border border-slate-600 rounded p-1 text-white">
+        </div>
+
+        <div class="flex gap-2 pt-1">
+          <button id="resetFilterBtn" class="w-1/3 bg-slate-800 hover:bg-slate-700 text-slate-300 py-1.5 rounded font-medium transition">รีเซ็ต</button>
+          <button id="applyFilterBtn" class="w-2/3 bg-orange-600 hover:bg-orange-500 text-white py-1.5 rounded font-medium transition">คัดกรอง</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- สถานะสิทธิ์และปุ่มล็อกอิน (มุมบนขวา) -->
+  <div class="absolute top-4 right-4 z-[1000] flex items-center gap-2">
+    <div id="userBadge" class="bg-slate-900/80 backdrop-blur-md border border-slate-700/60 text-white text-xs px-3 py-2 rounded-xl shadow-lg flex items-center gap-2">
+      <span class="w-2 h-2 rounded-full bg-slate-400" id="roleDot"></span>
+      <span id="roleLabel">ทั่วไป (Guest)</span>
+    </div>
+    <button id="authBtn" class="bg-slate-900/80 hover:bg-slate-800 backdrop-blur-md border border-slate-700/60 text-white p-2.5 rounded-xl shadow-lg transition" title="เข้าสู่ระบบ/ออกจากระบบ">
+      <i class="fa-solid fa-arrow-right-to-bracket"></i>
+    </button>
+  </div>
+
+  <!-- ปุ่มลอยบันทึกพิกัดใหม่ (FAB) -->
+  <button id="fabAddPin" class="hidden absolute bottom-6 right-6 z-[1000] bg-orange-600 hover:bg-orange-500 text-white w-14 h-14 rounded-full shadow-2xl flex items-center justify-center text-2xl transition hover:scale-105 active:scale-95" title="เพิ่มหมุดใหม่">
+    <i class="fa-solid fa-plus"></i>
+  </button>
+
+  <!-- Modal สำหรับเข้าสู่ระบบ -->
+  <div id="loginModal" class="hidden fixed inset-0 z-[2000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 text-white rounded-2xl max-w-sm w-full p-6 shadow-2xl">
+      <h3 class="text-lg font-bold mb-4 flex items-center gap-2"><i class="fa-solid fa-lock text-orange-500"></i> เข้าสู่ระบบ</h3>
+      <div class="space-y-3 text-sm">
+        <div>
+          <label class="block mb-1 text-slate-300">ชื่อผู้ใช้</label>
+          <input type="text" id="loginUsername" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:ring-1 focus:ring-orange-500">
+        </div>
+        <div>
+          <label class="block mb-1 text-slate-300">รหัสผ่าน</label>
+          <input type="password" id="loginPassword" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-white focus:outline-none focus:ring-1 focus:ring-orange-500">
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 mt-6">
+        <button id="closeLoginBtn" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">ยกเลิก</button>
+        <button id="submitLoginBtn" class="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg text-sm font-medium">เข้าสู่ระบบ</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal สำหรับเพิ่ม/แก้ไขข้อมูลพิกัด -->
+  <div id="pinModal" class="hidden fixed inset-0 z-[2000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+    <div class="bg-slate-900 border border-slate-700 text-white rounded-2xl max-w-md w-full p-6 shadow-2xl my-auto">
+      <h3 id="modalTitle" class="text-lg font-bold mb-3 flex items-center gap-2 text-orange-500">
+        <i class="fa-solid fa-location-dot"></i> <span>บันทึกจุดพิกัดใหม่</span>
+      </h3>
+      
+      <form id="pinForm" class="space-y-3 text-xs">
+        <input type="hidden" id="pinId">
+        <div>
+          <label class="block mb-1 text-slate-300">ชื่อจุด/สถานที่ *</label>
+          <input type="text" id="pinName" required class="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white focus:outline-none focus:ring-1 focus:ring-orange-500">
+        </div>
+        <div>
+          <label class="block mb-1 text-slate-300">หมวดหมู่ *</label>
+          <select id="pinCategory" class="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white">
+            <option value="hazard">🔴 จุดเสี่ยงไฟป่า/อันตราย</option>
+            <option value="water">💧 แหล่งน้ำเพื่อการดับไฟ</option>
+            <option value="nature">🌲 แหล่งทรัพยากรธรรมชาติ</option>
+            <option value="checkpoint">⭐ จุดสำคัญ/สังเกตการณ์</option>
+          </select>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block mb-1 text-slate-300">ละติจูด (Lat) *</label>
+            <input type="number" step="any" id="pinLat" required class="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white">
+          </div>
+          <div>
+            <label class="block mb-1 text-slate-300">ลองจิจูด (Lng) *</label>
+            <input type="number" step="any" id="pinLng" required class="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white">
+          </div>
+        </div>
+        <button type="button" id="fetchGpsBtn" class="w-full bg-slate-800 hover:bg-slate-700 py-1.5 border border-slate-600 rounded text-slate-200 transition">
+          <i class="fa-solid fa-location-crosshairs mr-1 text-orange-400"></i> ดึงพิกัด GPS อัตโนมัติจากอุปกรณ์
+        </button>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block mb-1 text-slate-300">จังหวัด</label>
+            <input type="text" id="pinProvince" class="w-full bg-slate-800 border border-slate-700 rounded p-1.5 text-white">
+          </div>
+          <div>
+            <label class="block mb-1 text-slate-300">อำเภอ</label>
+            <input type="text" id="pinDistrict" class="w-full bg-slate-800 border border-slate-700 rounded p-1.5 text-white">
+          </div>
+          <div>
+            <label class="block mb-1 text-slate-300">ตำบล</label>
+            <input type="text" id="pinSubdistrict" class="w-full bg-slate-800 border border-slate-700 rounded p-1.5 text-white">
+          </div>
+          <div>
+            <label class="block mb-1 text-slate-300">หมู่บ้าน</label>
+            <input type="text" id="pinVillage" class="w-full bg-slate-800 border border-slate-700 rounded p-1.5 text-white">
+          </div>
+        </div>
+
+        <div>
+          <label class="block mb-1 text-slate-300">รูปถ่ายสถานที่</label>
+          <input type="file" id="pinImage" accept="image/*" class="w-full text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-slate-700 file:text-white hover:file:bg-slate-600">
+        </div>
+
+        <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
+          <button type="button" id="closePinModalBtn" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded text-sm">ยกเลิก</button>
+          <button type="submit" id="savePinBtn" class="px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded text-sm font-medium transition">บันทึกข้อมูล</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const GAS_API_URL = "https://script.google.com/macros/s/AKfycbyVSPlOOPcluN1s2onkxIUyV8tCtpqayyZMdg-NObpVwMfGIATNfHhaDMNGiTAdR0iL/exec";
+
+    let currentUser = { role: "guest", fullName: "ผู้ใช้งานทั่วไป" };
+    let allPins = [];
+    let map, markersGroup, tempSearchMarker;
+
+    function initMap() {
+      // กำหนดพิกัดเริ่มต้นที่จังหวัดลำพูน (Lamphun, Thailand)
+      const LAMPHUN_COORDS = [18.5772, 99.0087];
+      map = L.map('map', { zoomControl: false }).setView(LAMPHUN_COORDS, 11);
+      
+      L.control.zoom({ position: 'bottomleft' }).addTo(map);
+
+      // 1. ภาพถ่ายดาวเทียมความละเอียดสูง (Esri World Imagery)
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Esri World Imagery',
+        maxZoom: 18
+      }).addTo(map);
+
+      // 2. เส้นเขตการปกครองและชื่อสถานที่ (Esri Reference Labels)
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Esri Reference Labels',
+        maxZoom: 18
+      }).addTo(map);
+
+      markersGroup = L.layerGroup().addTo(map);
+
+      map.on('movestart zoomstart', () => {
+        document.getElementById('filterPanel').classList.add('hidden');
+      });
+
+      // ปักหมุดเมื่อคลิกบนแผนที่ (สำหรับ Volunteer และ Admin)
+      map.on('click', (e) => {
+        if (currentUser.role === 'volunteer' || currentUser.role === 'admin') {
+          openPinModal('create', { lat: e.latlng.lat, lng: e.latlng.lng });
+        }
+      });
+    }
+
+    function createCustomIcon(category, status) {
+      let colorClass = "bg-yellow-400";
+      let hasSonar = false;
+
+      if (category === "hazard") {
+        colorClass = "bg-red-500";
+        hasSonar = true;
+      } else if (category === "water") {
+        colorClass = "bg-cyan-400";
+      } else if (category === "nature") {
+        colorClass = "bg-emerald-500";
+      }
+
+      let warningBadge = "";
+      if (status === "pending") {
+        warningBadge = `<span class="absolute -top-2 -right-2 bg-yellow-400 text-black text-[9px] px-1 rounded-full font-bold border border-black z-10" title="รอตรวจสอบ">!</span>`;
+      }
+
+      const html = `
+        <div class="custom-pin">
+          ${hasSonar ? '<div class="sonar-wave"></div>' : ''}
+          <div class="pin-core ${colorClass}"></div>
+          ${warningBadge}
+        </div>
+      `;
+
+      return L.divIcon({
+        html: html,
+        className: '',
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+      });
+    }
+
+    async function fetchPins() {
+      try {
+        const res = await fetch(`${GAS_API_URL}?role=${currentUser.role}`);
+        const result = await res.json();
+        if (result.status === "success") {
+          allPins = result.data;
+          applyFilter(false); // กรองเริ่มต้นโดยไม่เลื่อนแผนที่ออกจากลำพูน
+        }
+      } catch (err) {
+        console.error("Failed to fetch pins:", err);
+      }
+    }
+
+    function renderMarkers(pins) {
+      markersGroup.clearLayers();
+
+      pins.forEach(pin => {
+        const marker = L.marker([pin.lat, pin.lng], {
+          icon: createCustomIcon(pin.category, pin.status)
+        });
+
+        let popupContent = `
+          <div class="font-sans text-slate-800 text-xs w-48">
+            ${pin.imageUrl ? `<img src="${pin.imageUrl}" class="w-full h-24 object-cover rounded mb-2">` : ''}
+            <div class="font-bold text-sm text-slate-900">${pin.name}</div>
+            <div class="text-[11px] text-slate-500">${pin.village || ''} ต.${pin.subdistrict || ''} อ.${pin.district || ''} จ.${pin.province || ''}</div>
+            <div class="mt-1"><span class="px-1.5 py-0.5 rounded text-[10px] ${pin.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}">${pin.status}</span></div>
+        `;
+
+        if (currentUser.role === 'admin') {
+          popupContent += `
+            <div class="mt-2 pt-2 border-t flex flex-wrap gap-1">
+              ${pin.status === 'pending' 
+                ? `<button onclick="changePinStatus('${pin.id}', 'approve')" class="px-2 py-1 bg-emerald-600 text-white rounded text-[10px]">อนุมัติ</button>`
+                : `<button onclick="changePinStatus('${pin.id}', 'unapprove')" class="px-2 py-1 bg-amber-600 text-white rounded text-[10px]">ดึงกลับ</button>`
+              }
+              <button onclick="editPin('${pin.id}')" class="px-2 py-1 bg-blue-600 text-white rounded text-[10px]">แก้ไข</button>
+              <button onclick="deletePin('${pin.id}')" class="px-2 py-1 bg-red-600 text-white rounded text-[10px]">ลบ</button>
+            </div>
+          `;
+        }
+
+        popupContent += `</div>`;
+        marker.bindPopup(popupContent);
+        markersGroup.addLayer(marker);
+      });
+    }
+
+    function updateUserUI() {
+      const label = document.getElementById('roleLabel');
+      const dot = document.getElementById('roleDot');
+      const authBtn = document.getElementById('authBtn');
+      const fab = document.getElementById('fabAddPin');
+
+      if (currentUser.role === 'admin') {
+        label.innerText = `Admin (${currentUser.fullName})`;
+        dot.className = "w-2 h-2 rounded-full bg-red-500";
+        authBtn.innerHTML = '<i class="fa-solid fa-arrow-right-from-bracket"></i>';
+        fab.classList.remove('hidden');
+      } else if (currentUser.role === 'volunteer') {
+        label.innerText = `อาสาสมัคร (${currentUser.fullName})`;
+        dot.className = "w-2 h-2 rounded-full bg-emerald-500";
+        authBtn.innerHTML = '<i class="fa-solid fa-arrow-right-from-bracket"></i>';
+        fab.classList.remove('hidden');
+      } else {
+        label.innerText = "ทั่วไป (Guest)";
+        dot.className = "w-2 h-2 rounded-full bg-slate-400";
+        authBtn.innerHTML = '<i class="fa-solid fa-arrow-right-to-bracket"></i>';
+        fab.classList.add('hidden');
+      }
+      fetchPins();
+    }
+
+    const toBase64 = file => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = error => reject(error);
+    });
+
+    function openPinModal(mode, data = {}) {
+      document.getElementById('pinForm').reset();
+      document.getElementById('pinId').value = data.id || '';
+      document.getElementById('pinLat').value = data.lat ? Number(data.lat).toFixed(6) : '';
+      document.getElementById('pinLng').value = data.lng ? Number(data.lng).toFixed(6) : '';
+      
+      if (mode === 'edit') {
+        document.getElementById('modalTitle').innerHTML = '<i class="fa-solid fa-pen-to-square"></i> แก้ไขข้อมูลจุดพิกัด';
+        document.getElementById('pinName').value = data.name || '';
+        document.getElementById('pinCategory').value = data.category || 'hazard';
+        document.getElementById('pinProvince').value = data.province || '';
+        document.getElementById('pinDistrict').value = data.district || '';
+        document.getElementById('pinSubdistrict').value = data.subdistrict || '';
+        document.getElementById('pinVillage').value = data.village || '';
+      } else {
+        document.getElementById('modalTitle').innerHTML = '<i class="fa-solid fa-location-dot"></i> บันทึกจุดพิกัดใหม่';
+      }
+      document.getElementById('pinModal').classList.remove('hidden');
+    }
+
+    document.getElementById('pinForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const saveBtn = document.getElementById('savePinBtn');
+      saveBtn.disabled = true;
+      saveBtn.innerText = "กำลังบันทึก...";
+
+      const id = document.getElementById('pinId').value;
+      const fileInput = document.getElementById('pinImage');
+      let imageBase64 = "";
+
+      if (fileInput.files.length > 0) {
+        imageBase64 = await toBase64(fileInput.files[0]);
+      }
+
+      const payload = {
+        action: id ? "update" : "create",
+        id: id,
+        name: document.getElementById('pinName').value,
+        category: document.getElementById('pinCategory').value,
+        lat: document.getElementById('pinLat').value,
+        lng: document.getElementById('pinLng').value,
+        province: document.getElementById('pinProvince').value,
+        district: document.getElementById('pinDistrict').value,
+        subdistrict: document.getElementById('pinSubdistrict').value,
+        village: document.getElementById('pinVillage').value,
+        imageBase64: imageBase64
+      };
+
+      try {
+        const res = await fetch(GAS_API_URL, {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+        alert(result.message);
+        document.getElementById('pinModal').classList.add('hidden');
+        fetchPins();
+      } catch (err) {
+        alert("เกิดข้อผิดพลาดในการเชื่อมต่อเครือข่าย");
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.innerText = "บันทึกข้อมูล";
+      }
+    });
+
+    window.changePinStatus = async function(id, actionType) {
+      if (!confirm(`ยืนยันการดำเนินการ (${actionType})?`)) return;
+      const res = await fetch(GAS_API_URL, {
+        method: "POST",
+        body: JSON.stringify({ action: actionType, id: id, approvedBy: currentUser.fullName })
+      });
+      const result = await res.json();
+      alert(result.message);
+      fetchPins();
+    };
+
+    window.deletePin = async function(id) {
+      if (!confirm("ต้องการลบจุดพิกัดนี้ออกจากฐานข้อมูลอย่างถาวรหรือไม่?")) return;
+      const res = await fetch(GAS_API_URL, {
+        method: "POST",
+        body: JSON.stringify({ action: "delete", id: id })
+      });
+      const result = await res.json();
+      alert(result.message);
+      fetchPins();
+    };
+
+    window.editPin = function(id) {
+      const pin = allPins.find(p => p.id == id);
+      if (pin) openPinModal('edit', pin);
+    };
+
+    // ลอจิกการกรองหมุดข้อมูลในระบบ
+    function applyFilter(shouldFly = true) {
+      const search = document.getElementById('searchInput').value.toLowerCase().trim();
+      const cat = document.getElementById('filterCategory').value;
+      const prov = document.getElementById('filterProvince').value.toLowerCase().trim();
+      const dist = document.getElementById('filterDistrict').value.toLowerCase().trim();
+      const subdist = document.getElementById('filterSubdistrict').value.toLowerCase().trim();
+
+      const filtered = allPins.filter(p => {
+        const nameMatch = p.name && p.name.toLowerCase().includes(search);
+        const villageMatch = p.village && p.village.toLowerCase().includes(search);
+        const subdistSearchMatch = p.subdistrict && p.subdistrict.toLowerCase().includes(search);
+        const distSearchMatch = p.district && p.district.toLowerCase().includes(search);
+        const provSearchMatch = p.province && p.province.toLowerCase().includes(search);
+
+        const matchSearch = !search || nameMatch || villageMatch || subdistSearchMatch || distSearchMatch || provSearchMatch;
+        const matchCat = !cat || p.category === cat;
+        const matchProv = !prov || (p.province && p.province.toLowerCase().includes(prov));
+        const matchDist = !dist || (p.district && p.district.toLowerCase().includes(dist));
+        const matchSubdist = !subdist || (p.subdistrict && p.subdistrict.toLowerCase().includes(subdist));
+
+        return matchSearch && matchCat && matchProv && matchDist && matchSubdist;
+      });
+
+      renderMarkers(filtered);
+
+      // ถ้าค้นหาพบหมุดในระบบ ให้บินไปหาหมุดแรก
+      if (shouldFly && (search || subdist || dist || prov) && filtered.length > 0) {
+        map.flyTo([filtered[0].lat, filtered[0].lng], 14, { duration: 1.2 });
+        return true;
+      }
+      return filtered.length > 0;
+    }
+
+    // ฟังก์ชันค้นหาสถานที่สาธารณะ (Geocoding) ผ่าน Nominatim API สำหรับพื้นที่ที่ไม่เคยมีหมุด
+    async function searchPublicLocation(query) {
+      if (!query) return;
+      const statusEl = document.getElementById('searchStatus');
+      statusEl.classList.remove('hidden');
+
+      try {
+        // จำกัดขอบเขตการค้นหาเฉพาะประเทศไทย (countrycodes=th)
+        const endpoint = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=th&limit=1`;
+        const res = await fetch(endpoint, {
+          headers: { 'Accept-Language': 'th, en' }
+        });
+        const results = await res.json();
+
+        if (results && results.length > 0) {
+          const item = results[0];
+          const lat = parseFloat(item.lat);
+          const lon = parseFloat(item.lon);
+
+          // ลบหมุดค้นหาชั่วคราวเดิมถ้ามี
+          if (tempSearchMarker) map.removeLayer(tempSearchMarker);
+
+          // ปักหมุดสีน้ำเงินชั่วคราวเพื่อระบุตำแหน่งที่ค้นพบ
+          const searchIcon = L.divIcon({
+            html: `
+              <div class="flex items-center justify-center">
+                <div class="w-6 h-6 bg-blue-600 rounded-full border-2 border-white shadow-lg flex items-center justify-center text-white text-xs">
+                  <i class="fa-solid fa-location-arrow"></i>
+                </div>
+              </div>`,
+            className: '',
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+          });
+
+          tempSearchMarker = L.marker([lat, lon], { icon: searchIcon }).addTo(map);
+          tempSearchMarker.bindPopup(`
+            <div class="text-xs font-sans">
+              <strong class="text-blue-600 block mb-1">ตำแหน่งที่ค้นพบ:</strong>
+              <div>${item.display_name}</div>
+            </div>
+          `).openPopup();
+
+          map.flyTo([lat, lon], 14, { duration: 1.5 });
+        } else {
+          alert(`ไม่พบตำแหน่ง "${query}" บนแผนที่ภูมิศาสตร์`);
+        }
+      } catch (err) {
+        console.error("Geocoding failed:", err);
+      } finally {
+        statusEl.classList.add('hidden');
+      }
+    }
+
+    // เมื่อกดปุ่มค้นหา หรือกดปุ่มลูกศร
+    async function triggerGlobalSearch() {
+      const query = document.getElementById('searchInput').value.trim();
+      if (!query) return;
+
+      // 1. ลองค้นหาจากฐานข้อมูลหมุดภายในก่อน
+      const foundInPins = applyFilter(true);
+
+      // 2. ถ้าไม่พบในหมุด ให้ค้นหาจากฐานข้อมูลแผนที่ OpenStreetMap
+      if (!foundInPins) {
+        await searchPublicLocation(query);
+      }
+    }
+
+    // ผูก Event การพิมพ์และการกด Enter
+    document.getElementById('searchInput').addEventListener('input', () => applyFilter(false));
+    document.getElementById('searchInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        triggerGlobalSearch();
+      }
+    });
+
+    document.getElementById('searchOnlineBtn').addEventListener('click', triggerGlobalSearch);
+
+    document.getElementById('filterProvince').addEventListener('input', () => applyFilter(false));
+    document.getElementById('filterDistrict').addEventListener('input', () => applyFilter(false));
+    document.getElementById('filterSubdistrict').addEventListener('input', () => applyFilter(false));
+    document.getElementById('filterCategory').addEventListener('change', () => applyFilter(false));
+
+    document.getElementById('applyFilterBtn').addEventListener('click', () => {
+      applyFilter(true);
+      document.getElementById('filterPanel').classList.add('hidden');
+    });
+
+    document.getElementById('resetFilterBtn').addEventListener('click', () => {
+      document.getElementById('searchInput').value = '';
+      document.getElementById('filterCategory').value = '';
+      document.getElementById('filterProvince').value = '';
+      document.getElementById('filterDistrict').value = '';
+      document.getElementById('filterSubdistrict').value = '';
+      if (tempSearchMarker) map.removeLayer(tempSearchMarker);
+      applyFilter(false);
+      // รีเซ็ตมุมมองกลับมาที่จังหวัดลำพูน
+      map.flyTo([18.5772, 99.0087], 11);
+    });
+
+    document.getElementById('toggleFilterBtn').addEventListener('click', () => {
+      document.getElementById('filterPanel').classList.toggle('hidden');
+    });
+
+    document.getElementById('fabAddPin').addEventListener('click', () => {
+      openPinModal('create');
+    });
+
+    document.getElementById('closePinModalBtn').addEventListener('click', () => {
+      document.getElementById('pinModal').classList.add('hidden');
+    });
+
+    document.getElementById('fetchGpsBtn').addEventListener('click', () => {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(pos => {
+          document.getElementById('pinLat').value = pos.coords.latitude.toFixed(6);
+          document.getElementById('pinLng').value = pos.coords.longitude.toFixed(6);
+        }, () => alert("ไม่สามารถดึงตำแหน่งพิกัดได้ กรุณาเปิดสิทธิ์ GPS"));
+      }
+    });
+
+    document.getElementById('authBtn').addEventListener('click', () => {
+      if (currentUser.role !== 'guest') {
+        currentUser = { role: "guest", fullName: "ผู้ใช้งานทั่วไป" };
+        updateUserUI();
+      } else {
+        document.getElementById('loginModal').classList.remove('hidden');
+      }
+    });
+
+    document.getElementById('closeLoginBtn').addEventListener('click', () => {
+      document.getElementById('loginModal').classList.add('hidden');
+    });
+
+    document.getElementById('submitLoginBtn').addEventListener('click', async () => {
+      const u = document.getElementById('loginUsername').value;
+      const p = document.getElementById('loginPassword').value;
+      
+      const res = await fetch(GAS_API_URL, {
+        method: "POST",
+        body: JSON.stringify({ action: "login", username: u, password: p })
+      });
+      const result = await res.json();
+      if (result.status === "success") {
+        currentUser = result.user;
+        updateUserUI();
+        document.getElementById('loginModal').classList.add('hidden');
+      } else {
+        alert(result.message);
+      }
+    });
+
+    window.onload = () => {
+      initMap();
+      fetchPins();
+    };
+  </script>
+</body>
+</html>
